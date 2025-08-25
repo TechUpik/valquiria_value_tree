@@ -4,16 +4,8 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Value Tree — Visual v3", layout="wide")
-st.title("🌳 Value Tree — visual 'cards' (v3)")
-
-st.markdown("""
-- **Modo de rótulo das setas**: escolha como deseja exibir as relações.
-  - *Funnel (multiplicativo)* → se a fórmula do filho for `pai * taxa`, mostra a **taxa** na seta.
-  - *Split (aditivo)* → se a fórmula do pai for `filho1 + filho2 + ...`, mostra a **proporção** `filho/pai` na seta.
-  - *Auto* → tenta detectar automaticamente.
-- **Dica**: para evitar ciclos, a coluna `parent` é **ignorada** (somente `formula` define o grafo).
-""")
+st.set_page_config(page_title="Value Tree — Visual v3 (PNG export)", layout="wide")
+st.title("🌳 Value Tree — visual 'cards' (v3) + Export PNG/SVG")
 
 MODE_AUTO = "Auto (inferir)"
 MODE_FUNNEL = "Funnel (multiplicativo)"
@@ -110,11 +102,9 @@ def depth_by_topology(df: pd.DataFrame) -> Dict[str,int]:
     nodes, edges = build_graph(df)
     depth = {n:0 for n in nodes}
     for _ in range(len(nodes)):
-        changed=False
         for u,v in edges:
             if depth[v] < depth[u]+1:
-                depth[v]=depth[u]+1; changed=True
-        if not changed: break
+                depth[v]=depth[u]+1
     return depth
 
 def fmt_value(val, unit):
@@ -144,16 +134,12 @@ def label_multiplicative(df, env, u, v):
     return ""
 
 def is_pure_additive(expr: str, deps: List[str]) -> bool:
-    """Return True if expr is a sum of deps with + only (ignoring spaces)."""
     if not expr or not deps: return False
-    # Remove spaces
     e = re.sub(r"\s+", "", expr)
-    # Split by + and compare sets
     parts = e.split("+")
     return set(parts) == set(deps)
 
 def label_additive(df, env, u, v):
-    # v is the parent (has formula that sums children)
     row_v = df[df["id"]==v].iloc[0]
     expr = row_v.get("formula","")
     deps = extract_deps(expr)
@@ -168,30 +154,23 @@ def label_additive(df, env, u, v):
 def to_graphviz_cards(df: pd.DataFrame, env: Dict[str,float], mode_label: str, root_id: str = "") -> str:
     nodes, edges = build_graph(df)
     depth = depth_by_topology(df)
-
-    # Decide root highlight
     if not root_id:
-        # pick max depth node
         root_id = max(depth, key=lambda k: depth[k]) if depth else ""
-
     dot = []
     dot.append('digraph G {')
     dot.append('rankdir=LR;')
     dot.append('splines=ortho;')
     dot.append('nodesep=0.7; ranksep=1.2;')
     dot.append('node [shape=plain];')
-
-    # Layers (same rank)
     layers = {}
     for n,d in depth.items():
         layers.setdefault(d, []).append(n)
-
     for _,r in df.iterrows():
         nid = r["id"]; name = r.get("name", nid)
         unit = r.get("unit","")
         val = env.get(nid)
         val_txt = fmt_value(val, unit)
-        bg = "#dcfce7" if nid == root_id else "#f8fafc"  # root highlight (green-ish)
+        bg = "#dcfce7" if nid == root_id else "#f8fafc"
         label = (
             '<<TABLE BORDER="0" CELLBORDER="1" CELLPADDING="6" COLOR="#e5e7eb">'
             f'<TR><TD BGCOLOR="{bg}"><B>{name}</B></TD></TR>'
@@ -200,26 +179,20 @@ def to_graphviz_cards(df: pd.DataFrame, env: Dict[str,float], mode_label: str, r
             '</TABLE>>'
         )
         dot.append(f'"{nid}" [label={label}];')
-
     for u,v in edges:
-        lbl = ""
-        if mode_label == MODE_FUNNEL:
+        if mode_label == "Funnel (multiplicativo)":
             lbl = label_multiplicative(df, env, u, v)
-        elif mode_label == MODE_SPLIT:
+        elif mode_label == "Split (aditivo)":
             lbl = label_additive(df, env, u, v)
-        else:  # auto
-            lbl = label_multiplicative(df, env, u, v)
-            if not lbl:
-                lbl = label_additive(df, env, u, v)
+        else:
+            lbl = label_multiplicative(df, env, u, v) or label_additive(df, env, u, v)
         if lbl:
             dot.append(f'"{u}" -> "{v}" [label="{lbl}", fontsize=10, color="#9ca3af"];')
         else:
             dot.append(f'"{u}" -> "{v}" [color="#9ca3af"];')
-
     for d,ns in layers.items():
         if len(ns)>1:
-            dot.append('{ rank=same; ' + '; '.join([f\'"{n}"\' for n in ns]) + '; }')
-
+            dot.append('{ rank=same; ' + '; '.join([f'"{n}"' for n in ns]) + '; }')
     dot.append("}")
     return "\n".join(dot)
 
@@ -228,7 +201,6 @@ uploaded = st.file_uploader("Envie seu CSV", type=["csv"])
 if uploaded:
     df = load_df(uploaded)
     st.success(f"{len(df)} nós carregados.")
-
     st.sidebar.header("Parâmetros Editáveis")
     inputs = {}
     for _,r in df.iterrows():
@@ -245,22 +217,30 @@ if uploaded:
                 inputs[nid] = st.sidebar.number_input(r.get("name",nid), value=float(v), step=0.1, format="%.6f")
         else:
             inputs[nid] = None
-
-    mode = st.selectbox("Rótulo das setas", [MODE_AUTO, MODE_FUNNEL, MODE_SPLIT], index=0)
+    mode = st.selectbox("Rótulo das setas", ["Auto (inferir)", "Funnel (multiplicativo)", "Split (aditivo)"], index=0)
     root_id = st.text_input("Destacar KPI raiz (id)", value="")
-
     try:
         env = compute_values(df, inputs)
     except Exception as e:
         st.error(f"Erro no cálculo: {e}")
         st.stop()
-
     dot = to_graphviz_cards(df, env, mode_label=mode, root_id=root_id)
     st.subheader("Visualização (estilo cards)")
     st.graphviz_chart(dot, use_container_width=True)
 
+    st.subheader("Exportar")
     out_df = df.copy()
     out_df["value"] = out_df["id"].map(env).apply(lambda x: "" if x is None else x)
     st.download_button("⬇️ CSV atualizado", data=out_df.to_csv(index=False).encode("utf-8"), file_name="value_tree_updated.csv", mime="text/csv")
+    st.download_button("⬇️ DOT (.dot)", data=dot.encode("utf-8"), file_name="value_tree.dot", mime="text/plain")
+    try:
+        from graphviz import Source
+        src = Source(dot)
+        png = src.pipe(format="png")
+        st.download_button("⬇️ PNG", data=png, file_name="value_tree.png", mime="image/png")
+        svg = src.pipe(format="svg")
+        st.download_button("⬇️ SVG", data=svg, file_name="value_tree.svg", mime="image/svg+xml")
+    except Exception as e:
+        st.info("PNG/SVG não pôde ser gerado no servidor. Baixe o DOT e gere localmente com `dot -Tpng value_tree.dot -o value_tree.png`.")
 else:
     st.info("Envie um CSV para começar.")
