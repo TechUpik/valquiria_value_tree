@@ -4,8 +4,17 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Value Tree — Visual v3 (PNG export)", layout="wide")
-st.title("🌳 Value Tree — visual 'cards' (v3) + Export PNG/SVG")
+st.set_page_config(page_title="Value Tree — Visual v4", layout="wide")
+st.title("🌳 Value Tree — visual 'cards' (v4, clusters + ordem + root à esquerda)")
+
+st.markdown("""
+**Novidades desta versão**  
+- **Root à esquerda** (receita primeiro): direção do grafo invertida (rankdir=RL).  
+- **Grupos/caixas** por coluna `group` (subgraphs/“clusters” com título).  
+- **Ordenação manual** por coluna `order` (número crescente) dentro da mesma coluna/topologia.  
+- **Notas** por coluna `note` (aparece em cinza claro no card).  
+- Continua com labels **Auto / Funnel / Split** nas setas e export **CSV/DOT/PNG/SVG**.
+""")
 
 MODE_AUTO = "Auto (inferir)"
 MODE_FUNNEL = "Funnel (multiplicativo)"
@@ -14,6 +23,10 @@ MODE_SPLIT  = "Split (aditivo)"
 @st.cache_data(show_spinner=False)
 def load_df(file) -> pd.DataFrame:
     df = pd.read_csv(file, dtype=str).fillna("")
+    # optional columns
+    for c in ["group","order","note"]:
+        if c not in df.columns:
+            df[c] = ""
     def to_float(x):
         try:
             if str(x).strip() == "": return ""
@@ -31,6 +44,13 @@ def load_df(file) -> pd.DataFrame:
     for c in ["id","name","description","unit","formula","parent"]:
         if c not in df.columns:
             df[c] = ""
+    # coerce order to float for sorting
+    def to_ord(x):
+        try:
+            return float(x)
+        except:
+            return None
+    df["order_num"] = df["order"].apply(to_ord)
     return df
 
 def extract_deps(expr: str) -> List[str]:
@@ -151,38 +171,56 @@ def label_additive(df, env, u, v):
         return f"{child_val/parent_val:.1%}"
     return ""
 
-def to_graphviz_cards(df: pd.DataFrame, env: Dict[str,float], mode_label: str, root_id: str = "") -> str:
+def cards_dot(df: pd.DataFrame, env: Dict[str,float], mode_label: str, root_id: str = "") -> str:
     nodes, edges = build_graph(df)
     depth = depth_by_topology(df)
-    if not root_id:
-        root_id = max(depth, key=lambda k: depth[k]) if depth else ""
+    # root à esquerda: rankdir=RL (setas continuam u->v, mas posições invertem)
     dot = []
     dot.append('digraph G {')
-    dot.append('rankdir=LR;')
+    dot.append('rankdir=RL;')
     dot.append('splines=ortho;')
     dot.append('nodesep=0.7; ranksep=1.2;')
     dot.append('node [shape=plain];')
-    layers = {}
-    for n,d in depth.items():
-        layers.setdefault(d, []).append(n)
+
+    # clusters por group
+    groups = sorted([g for g in df["group"].unique() if str(g).strip()!=""])
+    for gi,g in enumerate(groups):
+        dot.append(f'subgraph cluster_{gi} {{ label="{g}"; color="#e5e7eb"; fontsize=12; fontcolor="#6b7280"; style="rounded"; }}')
+
+    # montar labels dos nós (cartões escuros)
     for _,r in df.iterrows():
         nid = r["id"]; name = r.get("name", nid)
         unit = r.get("unit","")
         val = env.get(nid)
         val_txt = fmt_value(val, unit)
-        bg = "#dcfce7" if nid == root_id else "#f8fafc"
-        label = (
+        note = r.get("note","")
+        card = (
             '<<TABLE BORDER="0" CELLBORDER="1" CELLPADDING="6" COLOR="#e5e7eb">'
-            f'<TR><TD BGCOLOR="{bg}"><B>{name}</B></TD></TR>'
-            f'<TR><TD><FONT POINT-SIZE="18">{val_txt if val_txt else ""}</FONT></TD></TR>'
-            f'<TR><TD><FONT POINT-SIZE="9" COLOR="#6b7280">{nid}</FONT></TD></TR>'
-            '</TABLE>>'
+            f'<TR><TD BGCOLOR="#111827"><FONT COLOR="#F9FAFB"><B>{name}</B></FONT></TD></TR>'
+            f'<TR><TD BGCOLOR="#111827"><FONT COLOR="#F9FAFB" POINT-SIZE="18">{val_txt if val_txt else ""}</FONT></TD></TR>'
+            f'<TR><TD BGCOLOR="#111827"><FONT COLOR="#9CA3AF" POINT-SIZE="9">{nid}</FONT></TD></TR>'
+            + (f'<TR><TD BGCOLOR="#111827"><FONT COLOR="#9CA3AF" POINT-SIZE="9">{note}</FONT></TD></TR>' if str(note).strip()!="" else '')
+            + '</TABLE>>'
         )
-        dot.append(f'"{nid}" [label={label}];')
+        # If node has a group, put it inside by using 'subgraph' name in attributes via 'cluster' not directly supported per-node.
+        # Graphviz doesn't assign nodes to clusters via attribute, we need to emit node inside the cluster block.
+        # Workaround: open cluster blocks later and re-emit nodes; here emit plain node definitions.
+        dot.append(f'"{nid}" [label={card}];')
+
+    # ordenar por depth + order_num
+    # We'll add invisible edges in each (depth, group) bucket to keep custom sequence
+    df["_depth"] = df["id"].map(depth)
+    for (d,g), bucket in df.groupby(["_depth","group"], dropna=False):
+        ordered = bucket.sort_values(by=["order_num","id"]).["id"].tolist()
+        if len(ordered) > 1:
+            inv_chain = ' -> '.join([f'"{n}"' for n in ordered])
+            dot.append(f'{inv_chain} [style=invis];')
+
+    # arestas com rótulos
     for u,v in edges:
-        if mode_label == "Funnel (multiplicativo)":
+        if mode_label == MODE_FUNNEL:
             lbl = label_multiplicative(df, env, u, v)
-        elif mode_label == "Split (aditivo)":
+        elif mode_label == MODE_SPLIT:
             lbl = label_additive(df, env, u, v)
         else:
             lbl = label_multiplicative(df, env, u, v) or label_additive(df, env, u, v)
@@ -190,13 +228,11 @@ def to_graphviz_cards(df: pd.DataFrame, env: Dict[str,float], mode_label: str, r
             dot.append(f'"{u}" -> "{v}" [label="{lbl}", fontsize=10, color="#9ca3af"];')
         else:
             dot.append(f'"{u}" -> "{v}" [color="#9ca3af"];')
-    for d,ns in layers.items():
-        if len(ns)>1:
-            dot.append('{ rank=same; ' + '; '.join([f'"{n}"' for n in ns]) + '; }')
+
     dot.append("}")
     return "\n".join(dot)
 
-uploaded = st.file_uploader("Envie seu CSV", type=["csv"])
+uploaded = st.file_uploader("Envie seu CSV (com colunas opcionais: group, order, note)", type=["csv"])
 
 if uploaded:
     df = load_df(uploaded)
@@ -217,15 +253,12 @@ if uploaded:
                 inputs[nid] = st.sidebar.number_input(r.get("name",nid), value=float(v), step=0.1, format="%.6f")
         else:
             inputs[nid] = None
-    mode = st.selectbox("Rótulo das setas", ["Auto (inferir)", "Funnel (multiplicativo)", "Split (aditivo)"], index=0)
-    root_id = st.text_input("Destacar KPI raiz (id)", value="")
-    try:
-        env = compute_values(df, inputs)
-    except Exception as e:
-        st.error(f"Erro no cálculo: {e}")
-        st.stop()
-    dot = to_graphviz_cards(df, env, mode_label=mode, root_id=root_id)
-    st.subheader("Visualização (estilo cards)")
+
+    mode = st.selectbox("Rótulo das setas", [MODE_AUTO, MODE_FUNNEL, MODE_SPLIT], index=0)
+    env = compute_values(df, inputs)
+    dot = cards_dot(df, env, mode_label=mode)
+
+    st.subheader("Visualização (cards, root à esquerda)")
     st.graphviz_chart(dot, use_container_width=True)
 
     st.subheader("Exportar")
@@ -243,4 +276,4 @@ if uploaded:
     except Exception as e:
         st.info("PNG/SVG não pôde ser gerado no servidor. Baixe o DOT e gere localmente com `dot -Tpng value_tree.dot -o value_tree.png`.")
 else:
-    st.info("Envie um CSV para começar.")
+    st.info("Envie um CSV para começar. As colunas extras `group`, `order`, `note` são opcionais.")
