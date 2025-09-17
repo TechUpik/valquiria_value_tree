@@ -10,7 +10,7 @@ import streamlit as st
 st.set_page_config(page_title="Value Tree — AB", layout="wide")
 
 st.title("🌳 Value Tree — AB (Match)")
-st.caption("App de árvore de valor conectado a planilha, com recálculo automático e overrides. (versão sem Pydantic)")
+st.caption("App de árvore de valor conectado a planilha, com recálculo automático e overrides.")
 
 # -----------------------------
 # 🔌 ENTRADA DE DADOS
@@ -43,7 +43,7 @@ with st.sidebar:
     st.write("💡 Dica: você pode começar com o template de CSV e depois trocar pela sua fonte real.")
 
 # -----------------------------
-# 🧮 UTILITÁRIOS (sem Pydantic)
+# 🧮 UTILITÁRIOS
 # -----------------------------
 def fnum(x, default=0.0):
     try:
@@ -125,19 +125,6 @@ def compute(i):
         "revenue": revenue,
     }
 
-# -----------------------------
-# 🎛️ CONTROLES & OVERRIDES AO VIVO
-# -----------------------------
-with st.expander("Overrides rápidos (testes no app)"):
-    st.write("Use para testar cenários sem mexer na planilha. Deixe em branco para não aplicar.")
-    override_visitors = st.number_input("Override: Visitantes totais", min_value=0.0, value=float("nan"))
-    override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
-    override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
-    override_avg_ticket = st.number_input("Override: Ticket médio", min_value=0.0, value=float("nan"))
-
-# -----------------------------
-# 🧾 PROCESSAMENTO
-# -----------------------------
 def fmt(x: float, kind: str = "num") -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "–"
@@ -147,20 +134,19 @@ def fmt(x: float, kind: str = "num") -> str:
         return f"R$ {x:,.2f}".replace(",", ".")
     return f"{x:,.0f}".replace(",", ".")
 
-def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num"):
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.markdown(f"**{title}**")
-        if sub:
-            st.caption(sub)
-    with col2:
-        badge = fmt(value, kind)
-        if target is not None:
-            color = "green" if value >= target else "red"
-            st.markdown(f"<div style='text-align:right; font-weight:600; color:{color};'>{badge}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div style='text-align:right; font-weight:600;'>{badge}</div>", unsafe_allow_html=True)
+# -----------------------------
+# 🎛️ CONTROLES & OVERRIDES
+# -----------------------------
+with st.expander("Overrides rápidos (testes no app)"):
+    st.write("Use para testar cenários sem mexer na planilha. Deixe em branco para não aplicar.")
+    override_visitors = st.number_input("Override: Visitantes totais", min_value=0.0, value=float("nan"))
+    override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
+    override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
+    override_avg_ticket = st.number_input("Override: Ticket médio", min_value=0.0, value=float("nan"))
 
+# -----------------------------
+# 🧾 PROCESSA DADOS
+# -----------------------------
 if df is None or len(df) == 0:
     st.info("📥 Carregue um CSV para começar. Você pode usar o template disponível.")
     st.stop()
@@ -181,56 +167,132 @@ if not math.isnan(override_avg_ticket):
     results["revenue"] = results["customers"] * results["avg_ticket"]
 
 # -----------------------------
-# 🌿 VISUALIZAÇÃO (árvore simplificada em blocos)
+# 🗺️ VISÕES
 # -----------------------------
-left, right = st.columns([1, 1])
+tab1, tab2 = st.tabs(["🌿 Blocos (lista)", "🔗 Árvore horizontal (Graphviz)"])
 
-with left:
-    st.subheader("Fontes de Tráfego")
-    render_row("Visitantes Totais", inputs["visitors_total"])
-    render_row("SEO", results["visitors_seo"])
-    render_row("SEM (Mídia Paga)", results["visitors_sem"])
-    render_row("Outros", results["visitors_other"])
+with tab1:
+    left, right = st.columns([1, 1])
 
-    st.divider()
-    st.subheader("Funil do Match")
-    render_row("Taxa de Engajamento", inputs["engagement_rate"], kind="perc", target=inputs.get("target_engagement_rate"))
-    render_row("Leads", results["leads"])
-    render_row("Inícios de Match", results["match_starts"])
-    render_row("Conclusões de Match", results["match_completions"])
-    render_row("MQLs (score)", results["mqls"])
-    render_row("SQLs", results["sqls"])
-    render_row("Clientes", results["customers"], target=inputs.get("target_customers"))
+    def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num"):
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown(f"**{title}**")
+            if sub:
+                st.caption(sub)
+        with col2:
+            badge = fmt(value, kind)
+            if target is not None:
+                color = "green" if value >= target else "red"
+                st.markdown(f"<div style='text-align:right; font-weight:600; color:{color};'>{badge}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div style='text-align:right; font-weight:600;'>{badge}</div>", unsafe_allow_html=True)
 
-with right:
-    st.subheader("Ticket & Receita")
-    render_row("Média de ambientes por pedido", inputs["avg_rooms_per_order"])
-    render_row("Preço médio por ambiente", inputs["avg_price_per_room"], kind="reais")
-    render_row("Volume de upsell", inputs["upsell_volume"])
-    render_row("Preço médio upsell", inputs["upsell_avg_price"], kind="reais")
-    render_row("Ticket médio", results["avg_ticket"], kind="reais")
+    with left:
+        st.subheader("Fontes de Tráfego")
+        render_row("Visitantes Totais", inputs["visitors_total"])
+        render_row("SEO", results["visitors_seo"])
+        render_row("SEM (Mídia Paga)", results["visitors_sem"])
+        render_row("Outros", results["visitors_other"])
 
-    st.divider()
-    st.subheader("Resultado")
-    render_row("Receita", results["revenue"], target=inputs.get("target_revenue"), kind="reais")
+        st.divider()
+        st.subheader("Funil do Match")
+        render_row("Taxa de Engajamento", inputs["engagement_rate"], kind="perc", target=inputs.get("target_engagement_rate"))
+        render_row("Leads", results["leads"])
+        render_row("Inícios de Match", results["match_starts"])
+        render_row("Conclusões de Match", results["match_completions"])
+        render_row("MQLs (score)", results["mqls"])
+        render_row("SQLs", results["sqls"])
+        render_row("Clientes", results["customers"], target=inputs.get("target_customers"))
 
-with st.expander("Documentação rápida"):
-    st.markdown(
-        """
-        **Como usar**
-        1. Prepare um CSV com as colunas do template (ou publique uma planilha como CSV).
-        2. Carregue a fonte na barra lateral.
-        3. Ajuste overrides rápidos para simular cenários.
+    with right:
+        st.subheader("Ticket & Receita")
+        render_row("Média de ambientes por pedido", inputs["avg_rooms_per_order"])
+        render_row("Preço médio por ambiente", inputs["avg_price_per_room"], kind="reais")
+        render_row("Volume de upsell", inputs["upsell_volume"])
+        render_row("Preço médio upsell", inputs["upsell_avg_price"], kind="reais")
+        render_row("Ticket médio", results["avg_ticket"], kind="reais")
 
-        **Fórmulas principais**
-        - `visitors_seo = visitors_total * prop_seo`
-        - `leads = visitors_total * engagement_rate` (ou override)
-        - `match_starts = leads * match_start_rate`
-        - `match_completions = match_starts * match_completion_rate`
-        - `mqls = leads * mql_rate * score_accuracy`
-        - `sqls = mqls * sql_rate`
-        - `customers = sqls * close_rate`
-        - `avg_ticket = (avg_rooms_per_order * avg_price_per_room) + (upsell_volume * upsell_avg_price)`
-        - `revenue = customers * avg_ticket`
-        """
-    )
+        st.divider()
+        st.subheader("Resultado")
+        render_row("Receita", results["revenue"], target=inputs.get("target_revenue"), kind="reais")
+
+with tab2:
+    st.write("Diagrama com fluxo da esquerda para a direita. Passe o mouse nos nós para ver os detalhes.")
+    # Monta DOT
+    def node(label, title=None):
+        return f"<<b>{title or ''}</b><br/>{label}>"
+
+    # rótulos
+    vtot = f"{int(inputs['visitors_total']):,}".replace(",", ".")
+    seo = f"{int(results['visitors_seo']):,}".replace(",", ".")
+    sem = f"{int(results['visitors_sem']):,}".replace(",", ".")
+    oth = f"{int(results['visitors_other']):,}".replace(",", ".")
+    lead = f"{int(results['leads']):,}".replace(",", ".")
+    ms = f"{int(results['match_starts']):,}".replace(",", ".")
+    mc = f"{int(results['match_completions']):,}".replace(",", ".")
+    mql = f"{int(results['mqls']):,}".replace(",", ".")
+    sql = f"{int(results['sqls']):,}".replace(",", ".")
+    cus = f"{int(results['customers']):,}".replace(",", ".")
+    tkt = fmt(results['avg_ticket'], 'reais')
+    rev = fmt(results['revenue'], 'reais')
+
+    dot = f'''
+    digraph G {{
+      rankdir=LR;
+      bgcolor="transparent";
+      node [shape=rectangle, style="rounded,filled", fillcolor="white", color="#BBBBBB", fontname="Helvetica", fontsize=12];
+      edge [color="#999999"];
+
+      subgraph cluster_traffic {{
+        label="Fontes de Tráfego";
+        color="#EAEAEA";
+        vtot [label=<{vtot}<br/><font point-size="10">Visitantes totais</font>>];
+        seo  [label=<{seo}<br/><font point-size="10">SEO ({inputs['prop_seo']*100:.1f}%)</font>>];
+        sem  [label=<{sem}<br/><font point-size="10">SEM ({inputs['prop_sem']*100:.1f}%)</font>>];
+        oth  [label=<{oth}<br/><font point-size="10">Outros ({inputs['prop_other']*100:.1f}%)</font>>];
+      }}
+
+      subgraph cluster_funnel {{
+        label="Funil do Match";
+        color="#EAEAEA";
+        leads [label=<{lead}<br/><font point-size="10">Leads (engajamento {inputs['engagement_rate']*100:.2f}%)</font>>];
+        mstarts [label=<{ms}<br/><font point-size="10">Inícios ({inputs['match_start_rate']*100:.1f}%)</font>>];
+        mcomp   [label=<{mc}<br/><font point-size="10">Conclusões ({inputs['match_completion_rate']*100:.1f}%)</font>>];
+        mqls    [label=<{mql}<br/><font point-size="10">MQLs (score {inputs['mql_rate']*100:.1f}%)</font>>];
+        sqls    [label=<{sql}<br/><font point-size="10">SQLs ({inputs['sql_rate']*100:.1f}%)</font>>];
+        cust    [label=<{cus}<br/><font point-size="10">Clientes (fechamento {inputs['close_rate']*100:.1f}%)</font>>];
+      }}
+
+      subgraph cluster_ticket {{
+        label="Ticket";
+        color="#EAEAEA";
+        ticket [label=<{tkt}<br/><font point-size="10">Ticket médio</font>>];
+      }}
+
+      subgraph cluster_out {{
+        label="Resultado";
+        color="#EAEAEA";
+        revenue [label=<{rev}<br/><font point-size="10">Receita</font>> fillcolor="#F5FFF5"];
+      }}
+
+      // conexões
+      vtot -> leads
+      seo  -> vtot [style=dashed, arrowhead=none]
+      sem  -> vtot [style=dashed, arrowhead=none]
+      oth  -> vtot [style=dashed, arrowhead=none]
+
+      leads -> mstarts -> mcomp
+      mqls -> sqls -> cust
+
+      // ligação dos estágios auxiliares
+      leads -> mqls [style=dotted]
+      mcomp -> mqls [style=dotted]
+
+      // receita
+      cust -> revenue
+      ticket -> revenue [label="", color="#7FBF7F"]
+
+    }}
+    '''
+    st.graphviz_chart(dot, use_container_width=True)
