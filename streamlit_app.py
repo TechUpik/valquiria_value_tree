@@ -1,12 +1,12 @@
-import io, math
-from typing import Optional, Dict, Any
+import io, math, random
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Value Tree — AB", layout="wide")
 st.title("🌳 Value Tree — AB (Match)")
-st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz), rótulos amigáveis e impacto na receita.")
+st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz), rótulos amigáveis, impacto na receita e análise de contribuição.")
 
 @st.cache_data
 def load_csv(upload) -> pd.DataFrame:
@@ -217,7 +217,6 @@ if source == "Planilha CSV":
         st.stop()
     row = df.iloc[0]
     inputs = parse_inputs_from_row(row)
-    # Define baseline as the row loaded (first load only)
     if "csv_baseline_set" not in st.session_state:
         st.session_state["baseline_inputs"] = inputs.copy()
         st.session_state["csv_baseline_set"] = True
@@ -360,10 +359,8 @@ with tab2:
 with tab3:
     st.subheader("Impacto na Receita (vs. base)")
 
-    # Baseline (guardada no primeiro load)
     base_i = st.session_state["baseline_inputs"].copy()
 
-    # Função que calcula receita com/sem overrides
     def revenue_of(i: Dict[str, Any], ignore_overrides: bool = False) -> float:
         j = i.copy()
         if ignore_overrides:
@@ -382,12 +379,29 @@ with tab3:
     else:
         st.write("Base de receita igual a zero — impossível calcular % de variação.")
 
-    # Impacto one-at-a-time (OAT)
-    st.markdown("**Impacto isolado por hipótese (um de cada por vez)**")
-    keys = [
-        "visitors_total","engagement_rate","mql_rate","sql_rate","close_rate",
-        "avg_rooms_per_order","avg_price_per_room"
-    ]
+    st.markdown("### Teste rápido (sliders)")
+    st.caption("Ajuste um ou mais parâmetros e veja a variação da receita.")
+    test_keys = ["visitors_total","engagement_rate","mql_rate","sql_rate","close_rate","avg_rooms_per_order","avg_price_per_room"]
+    cols = st.columns(len(test_keys))
+    factors = {}
+    for c, k in zip(cols, test_keys):
+        with c:
+            factors[k] = st.slider(f"{LABELS.get(k,(k,''))[0]}", -50, 50, 0, 1, help="Variação percentual vs. base")
+
+    # aplica fatores sobre a base para criar cenário
+    scen = base_i.copy()
+    for k, pct in factors.items():
+        mult = 1 + pct/100.0
+        if k in ["engagement_rate","mql_rate","sql_rate","close_rate"]:
+            scen[k] = max(0.0, min(1.0, base_i[k]*mult))
+        else:
+            scen[k] = max(0.0, base_i[k]*mult)
+    scen_rev = revenue_of(scen, ignore_overrides=not use_overrides)
+    if base_rev and base_rev != 0:
+        st.metric("Impacto do cenário (sliders)", fmt((scen_rev - base_rev)/base_rev, "perc"))
+
+    st.markdown("### Impacto isolado por hipótese (OAT)")
+    keys = ["visitors_total","engagement_rate","mql_rate","sql_rate","close_rate","avg_rooms_per_order","avg_price_per_room"]
     rows = []
     for k in keys:
         test = base_i.copy()
@@ -395,7 +409,54 @@ with tab3:
         test_rev = revenue_of(test, ignore_overrides=not use_overrides)
         if base_rev and base_rev != 0:
             pct = (test_rev - base_rev) / base_rev
-            rows.append({"Hipótese": LABELS.get(k, (k,""))[0], "Impacto na Receita": fmt(pct, "perc")})
+            rows.append({"Hipótese": LABELS.get(k, (k,""))[0], "Impacto na Receita": pct})
     if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    st.caption("Cálculo OAT: muda-se apenas a hipótese indicada, mantendo todas as demais na base. Overrides podem mascarar impactos; desative-os no toggle acima para ver a sensibilidade estrutural.")
+        df = pd.DataFrame(rows)
+        # Highlight > ±10%
+        def highlight(val):
+            try:
+                v = float(val)
+            except:
+                return ""
+            if v >= 0.10:
+                return "color: green; font-weight: 700"
+            if v <= -0.10:
+                return "color: red; font-weight: 700"
+            return ""
+        st.dataframe(df.style.format({"Impacto na Receita": "{:.2%}"}).applymap(highlight, subset=["Impacto na Receita"]), use_container_width=True)
+
+    st.markdown("### Contribuição aproximada (Shapley-like)")
+    st.caption("Atribuição do delta total entre **base** e **estado atual**. Calculada por média das contribuições marginais em permutações aleatórias (aprox.).")
+    contrib_keys = keys
+    target = inputs.copy()  # estado atual
+    perms = st.slider("Nº de permutações", 16, 256, 64, 16, help="Mais permutações = mais estável, mas mais lento.")
+    contrib = {k: 0.0 for k in contrib_keys}
+    if base_rev and base_rev != 0:
+        for _ in range(perms):
+            order = contrib_keys.copy()
+            random.shuffle(order)
+            state = base_i.copy()
+            prev_rev = revenue_of(state, ignore_overrides=not use_overrides)
+            for k in order:
+                state[k] = target[k]
+                new_rev = revenue_of(state, ignore_overrides=not use_overrides)
+                contrib[k] += (new_rev - prev_rev) / base_rev
+                prev_rev = new_rev
+        # média
+        for k in contrib:
+            contrib[k] /= perms
+        rows2 = [{"Hipótese": LABELS.get(k,(k,""))[0], "Contribuição %": contrib[k]} for k in contrib_keys]
+        df2 = pd.DataFrame(rows2).sort_values("Contribuição %", ascending=False)
+        def hl2(val):
+            try:
+                v = float(val)
+            except:
+                return ""
+            if v >= 0.10:
+                return "background-color: #e7f6ec; color: green; font-weight: 700"
+            if v <= -0.10:
+                return "background-color: #fdecea; color: red; font-weight: 700"
+            return ""
+        st.dataframe(df2.style.format({"Contribuição %": "{:.2%}"}).applymap(hl2, subset=["Contribuição %"]), use_container_width=True)
+    else:
+        st.info("Defina uma base com receita > 0 para ver a decomposição.")
