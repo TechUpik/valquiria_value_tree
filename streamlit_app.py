@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Value Tree — AB", layout="wide")
 st.title("🌳 Value Tree — AB (Match)")
-st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz), rótulos amigáveis, impacto na receita e análise de contribuição.")
+st.caption("Editor amigável, impacto na receita e testes rápidos com opção de ignorar overrides da base.")
 
 @st.cache_data
 def load_csv(upload) -> pd.DataFrame:
@@ -124,7 +124,6 @@ def fmt(x: float, kind: str = "num", decimals: int = 0) -> str:
         return f"R$ {x:,.2f}".replace(",", ".")
     return f"{x:,.{decimals}f}".replace(",", ".")
 
-# Labels + help
 LABELS = {
     "visitors_total": ("Visitantes Totais", "Tráfego total esperado no mês."),
     "prop_seo": ("% SEO", "Proporção do tráfego que vem de orgânico."),
@@ -176,7 +175,6 @@ with st.sidebar:
     else:
         st.caption("Preencha abaixo para calcular sem planilha. Você pode exportar como CSV.")
 
-# Defaults (base)
 defaults = dict(
     visitors_total=15951, prop_seo=0.0179, prop_sem=0.9085, prop_other=0.0736,
     engagement_rate=2227/15951, match_start_rate=8492/2227, match_completion_rate=2227/8492,
@@ -206,7 +204,7 @@ def editor_form():
                 values[k] = st.number_input(label, value=float(defaults[k]), min_value=0.0, step=0.01, help=helptext)
     return values
 
-# Establish baseline in session_state once (for delta calc)
+# Baseline for deltas
 if "baseline_inputs" not in st.session_state:
     st.session_state["baseline_inputs"] = defaults.copy()
 
@@ -223,27 +221,42 @@ if source == "Planilha CSV":
 else:
     inputs = editor_form()
 
-# Overrides rápidos (sem salvar)
+# Overrides rápidos
 with st.expander("Overrides rápidos (testes no app)"):
     st.write("Use para testar cenários sem alterar a base.")
-    override_visitors = st.number_input("Override: Visitantes totais", min_value=0.0, value=float("nan"))
-    override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, value=float("nan"))
-    override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, value=float("nan"))
-    override_avg_ticket = st.number_input("Override: Ticket médio", min_value=0.0, value=float("nan"))
+    ignore_base_overrides = st.checkbox("Ignorar overrides da base durante o teste", value=True, help="Ao marcar, o teste força o funil a recalcular a partir das taxas (desconsidera leads/sqls/ticket fixos da base).")
+    colA, colB = st.columns(2)
+    with colA:
+        override_visitors = st.number_input("Override: Visitantes totais", min_value=0.0, value=float("nan"))
+        override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
+    with colB:
+        override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
+        override_avg_ticket = st.number_input("Override: Ticket médio", min_value=0.0, value=float("nan"))
+    if st.button("Limpar overrides rápidos"):
+        override_visitors = float("nan")
+        override_close = float("nan")
+        override_eng = float("nan")
+        override_avg_ticket = float("nan")
 
+# aplica overrides rápidos
 if not math.isnan(override_visitors): inputs["visitors_total"] = override_visitors
 if not math.isnan(override_eng): inputs["engagement_rate"] = override_eng
 if not math.isnan(override_close): inputs["close_rate"] = override_close
 
-# CÁLCULOS
-results = compute(inputs)
+# se for ignorar overrides da base, zera-os temporariamente
+scenario_inputs = inputs.copy()
+if ignore_base_overrides:
+    for k in ["leads_override","match_starts_override","match_completions_override","mqls_override","sqls_override","customers_override","avg_ticket_override"]:
+        scenario_inputs[k] = None
 
+# CÁLCULOS (com a política acima)
+results = compute(scenario_inputs)
 if not math.isnan(override_avg_ticket):
     results["avg_ticket"] = override_avg_ticket
     results["revenue"] = results["customers"] * results["avg_ticket"]
 
 # VISÕES
-tab1, tab2, tab3 = st.tabs(["🌿 Blocos", "🔗 Árvore horizontal (Graphviz)", "📈 Impacto na Receita"])
+tab1, tab2 = st.tabs(["🌿 Blocos (cenário)", "🔗 Árvore horizontal (Graphviz)"])
 
 def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num", decimals: int = 0):
     col1, col2 = st.columns([1, 1])
@@ -262,32 +275,32 @@ with tab1:
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Fontes de Tráfego")
-        render_row("Visitantes Totais", inputs["visitors_total"])
+        render_row("Visitantes Totais", scenario_inputs["visitors_total"])
         render_row("SEO", results["visitors_seo"])
         render_row("SEM (Mídia Paga)", results["visitors_sem"])
         render_row("Outros", results["visitors_other"])
         st.divider()
-        st.subheader("Funil do Match")
-        render_row("Taxa de Engajamento", inputs["engagement_rate"], kind="perc")
+        st.subheader("Funil do Match (cenário)")
+        render_row("Taxa de Engajamento", scenario_inputs["engagement_rate"], kind="perc")
         render_row("Leads", results["leads"])
         render_row("Inícios de Match", results["match_starts"])
         render_row("Conclusões de Match", results["match_completions"])
         render_row("MQLs (score)", results["mqls"])
         render_row("SQLs", results["sqls"])
-        render_row("Clientes", results["customers"], target=inputs.get("target_customers"))
+        render_row("Clientes", results["customers"], target=scenario_inputs.get("target_customers"))
     with right:
-        st.subheader("Ticket & Receita")
-        render_row("Média de ambientes por pedido", inputs["avg_rooms_per_order"], decimals=2)
-        render_row("Preço médio por ambiente", inputs["avg_price_per_room"], kind="reais")
-        render_row("Volume de upsell", inputs["upsell_volume"], decimals=2)
-        render_row("Preço médio upsell", inputs["upsell_avg_price"], kind="reais")
+        st.subheader("Ticket & Receita (cenário)")
+        render_row("Média de ambientes por pedido", scenario_inputs["avg_rooms_per_order"], decimals=2)
+        render_row("Preço médio por ambiente", scenario_inputs["avg_price_per_room"], kind="reais")
+        render_row("Volume de upsell", scenario_inputs["upsell_volume"], decimals=2)
+        render_row("Preço médio upsell", scenario_inputs["upsell_avg_price"], kind="reais")
         render_row("Ticket médio", results["avg_ticket"], kind="reais")
         st.divider()
         st.subheader("Resultado")
-        render_row("Receita", results["revenue"], target=inputs.get("target_revenue"), kind="reais")
+        render_row("Receita", results["revenue"], target=scenario_inputs.get("target_revenue"), kind="reais")
 
 with tab2:
-    vtot = f"{int(inputs['visitors_total']):,}".replace(",", ".")
+    vtot = f"{int(scenario_inputs['visitors_total']):,}".replace(",", ".")
     seo = f"{int(results['visitors_seo']):,}".replace(",", ".")
     sem = f"{int(results['visitors_sem']):,}".replace(",", ".")
     oth = f"{int(results['visitors_other']):,}".replace(",", ".")
@@ -311,15 +324,15 @@ with tab2:
         label="Fontes de Tráfego";
         color="#EAEAEA";
         vtot [label=<{vtot}<br/><font point-size="10">Visitantes totais</font>>];
-        seo  [label=<{seo}<br/><font point-size="10">SEO ({inputs['prop_seo']*100:.2f}%)</font>>];
-        sem  [label=<{sem}<br/><font point-size="10">SEM ({inputs['prop_sem']*100:.2f}%)</font>>];
-        oth  [label=<{oth}<br/><font point-size="10">Outros ({inputs['prop_other']*100:.2f}%)</font>>];
+        seo  [label=<{seo}<br/><font point-size="10">SEO ({scenario_inputs['prop_seo']*100:.2f}%)</font>>];
+        sem  [label=<{sem}<br/><font point-size="10">SEM ({scenario_inputs['prop_sem']*100:.2f}%)</font>>];
+        oth  [label=<{oth}<br/><font point-size="10">Outros ({scenario_inputs['prop_other']*100:.2f}%)</font>>];
       }}
 
       subgraph cluster_funnel {{
-        label="Funil do Match";
+        label="Funil do Match (cenário)";
         color="#EAEAEA";
-        leads [label=<{lead}<br/><font point-size="10">Leads (engaj. {inputs['engagement_rate']*100:.2f}%)</font>>];
+        leads [label=<{lead}<br/><font point-size="10">Leads (engaj. {scenario_inputs['engagement_rate']*100:.2f}%)</font>>];
         mstarts [label=<{ms}<br/><font point-size="10">Inícios</font>>];
         mcomp   [label=<{mc}<br/><font point-size="10">Conclusões</font>>];
         mqls    [label=<{mql}<br/><font point-size="10">MQLs</font>>];
@@ -355,108 +368,3 @@ with tab2:
     }}
     '''
     st.graphviz_chart(dot, use_container_width=True)
-
-with tab3:
-    st.subheader("Impacto na Receita (vs. base)")
-
-    base_i = st.session_state["baseline_inputs"].copy()
-
-    def revenue_of(i: Dict[str, Any], ignore_overrides: bool = False) -> float:
-        j = i.copy()
-        if ignore_overrides:
-            for k in ["leads_override","match_starts_override","match_completions_override","mqls_override","sqls_override","customers_override","avg_ticket_override"]:
-                j[k] = None
-        return compute(j)["revenue"]
-
-    use_overrides = st.checkbox("Usar overrides no cálculo de impacto", value=False, help="Se desmarcado, o impacto considera apenas as fórmulas do funil (ignora overrides).")
-
-    base_rev = revenue_of(base_i, ignore_overrides=not use_overrides)
-    cur_rev = revenue_of(inputs, ignore_overrides=not use_overrides)
-
-    if base_rev and base_rev != 0:
-        delta = (cur_rev - base_rev) / base_rev
-        st.metric("Variação total da receita", fmt(delta, "perc"))
-    else:
-        st.write("Base de receita igual a zero — impossível calcular % de variação.")
-
-    st.markdown("### Teste rápido (sliders)")
-    st.caption("Ajuste um ou mais parâmetros e veja a variação da receita.")
-    test_keys = ["visitors_total","engagement_rate","mql_rate","sql_rate","close_rate","avg_rooms_per_order","avg_price_per_room"]
-    cols = st.columns(len(test_keys))
-    factors = {}
-    for c, k in zip(cols, test_keys):
-        with c:
-            factors[k] = st.slider(f"{LABELS.get(k,(k,''))[0]}", -50, 50, 0, 1, help="Variação percentual vs. base")
-
-    # aplica fatores sobre a base para criar cenário
-    scen = base_i.copy()
-    for k, pct in factors.items():
-        mult = 1 + pct/100.0
-        if k in ["engagement_rate","mql_rate","sql_rate","close_rate"]:
-            scen[k] = max(0.0, min(1.0, base_i[k]*mult))
-        else:
-            scen[k] = max(0.0, base_i[k]*mult)
-    scen_rev = revenue_of(scen, ignore_overrides=not use_overrides)
-    if base_rev and base_rev != 0:
-        st.metric("Impacto do cenário (sliders)", fmt((scen_rev - base_rev)/base_rev, "perc"))
-
-    st.markdown("### Impacto isolado por hipótese (OAT)")
-    keys = ["visitors_total","engagement_rate","mql_rate","sql_rate","close_rate","avg_rooms_per_order","avg_price_per_room"]
-    rows = []
-    for k in keys:
-        test = base_i.copy()
-        test[k] = inputs[k]
-        test_rev = revenue_of(test, ignore_overrides=not use_overrides)
-        if base_rev and base_rev != 0:
-            pct = (test_rev - base_rev) / base_rev
-            rows.append({"Hipótese": LABELS.get(k, (k,""))[0], "Impacto na Receita": pct})
-    if rows:
-        df = pd.DataFrame(rows)
-        # Highlight > ±10%
-        def highlight(val):
-            try:
-                v = float(val)
-            except:
-                return ""
-            if v >= 0.10:
-                return "color: green; font-weight: 700"
-            if v <= -0.10:
-                return "color: red; font-weight: 700"
-            return ""
-        st.dataframe(df.style.format({"Impacto na Receita": "{:.2%}"}).applymap(highlight, subset=["Impacto na Receita"]), use_container_width=True)
-
-    st.markdown("### Contribuição aproximada (Shapley-like)")
-    st.caption("Atribuição do delta total entre **base** e **estado atual**. Calculada por média das contribuições marginais em permutações aleatórias (aprox.).")
-    contrib_keys = keys
-    target = inputs.copy()  # estado atual
-    perms = st.slider("Nº de permutações", 16, 256, 64, 16, help="Mais permutações = mais estável, mas mais lento.")
-    contrib = {k: 0.0 for k in contrib_keys}
-    if base_rev and base_rev != 0:
-        for _ in range(perms):
-            order = contrib_keys.copy()
-            random.shuffle(order)
-            state = base_i.copy()
-            prev_rev = revenue_of(state, ignore_overrides=not use_overrides)
-            for k in order:
-                state[k] = target[k]
-                new_rev = revenue_of(state, ignore_overrides=not use_overrides)
-                contrib[k] += (new_rev - prev_rev) / base_rev
-                prev_rev = new_rev
-        # média
-        for k in contrib:
-            contrib[k] /= perms
-        rows2 = [{"Hipótese": LABELS.get(k,(k,""))[0], "Contribuição %": contrib[k]} for k in contrib_keys]
-        df2 = pd.DataFrame(rows2).sort_values("Contribuição %", ascending=False)
-        def hl2(val):
-            try:
-                v = float(val)
-            except:
-                return ""
-            if v >= 0.10:
-                return "background-color: #e7f6ec; color: green; font-weight: 700"
-            if v <= -0.10:
-                return "background-color: #fdecea; color: red; font-weight: 700"
-            return ""
-        st.dataframe(df2.style.format({"Contribuição %": "{:.2%}"}).applymap(hl2, subset=["Contribuição %"]), use_container_width=True)
-    else:
-        st.info("Defina uma base com receita > 0 para ver a decomposição.")
