@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Value Tree — AB", layout="wide")
 st.title("🌳 Value Tree — AB (Match)")
-st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz) e overrides por nó.")
+st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz), rótulos amigáveis e impacto na receita.")
 
 @st.cache_data
 def load_csv(upload) -> pd.DataFrame:
@@ -50,7 +50,7 @@ def parse_inputs_from_row(row: pd.Series) -> Dict[str, Any]:
         "prop_sem": f01(get("prop_sem")),
         "prop_other": f01(get("prop_other")),
         "engagement_rate": f01(get("engagement_rate")),
-        "match_start_rate": fnum(get("match_start_rate")),               # pode ser >1 (múltiplos inícios/lead)
+        "match_start_rate": fnum(get("match_start_rate")),
         "match_completion_rate": f01(get("match_completion_rate")),
         "mql_rate": f01(get("mql_rate")),
         "score_accuracy": f01(get("score_accuracy", 1.0)),
@@ -124,6 +124,36 @@ def fmt(x: float, kind: str = "num", decimals: int = 0) -> str:
         return f"R$ {x:,.2f}".replace(",", ".")
     return f"{x:,.{decimals}f}".replace(",", ".")
 
+# Labels + help
+LABELS = {
+    "visitors_total": ("Visitantes Totais", "Tráfego total esperado no mês."),
+    "prop_seo": ("% SEO", "Proporção do tráfego que vem de orgânico."),
+    "prop_sem": ("% SEM (Mídia Paga)", "Proporção do tráfego que vem de mídia paga."),
+    "prop_other": ("% Outros", "Proporção do tráfego de social/direto/referral."),
+    "engagement_rate": ("Taxa de Engajamento", "% de visitantes que viram leads no Match."),
+    "match_start_rate": ("Início do Match / Leads", "Média de inícios de Match por lead (pode ser > 1)."),
+    "match_completion_rate": ("Conclusão do Match / Inícios", "% de inícios que chegam ao fim do Match."),
+    "mql_rate": ("Taxa de Qualificação MQL", "% de leads que viram MQL (via score)."),
+    "score_accuracy": ("Acurácia do Score", "Ajuste de confiabilidade do score (1 = 100%)."),
+    "sql_rate": ("Taxa de Qualificação SQL", "% de MQLs que viram SQLs."),
+    "close_rate": ("Taxa de Fechamento", "% de SQLs que viram clientes."),
+    "first_contact_speed_days": ("Velocidade do 1º contato (dias)", "Tempo médio até o primeiro contato."),
+    "leads_override": ("Leads (override)", "Força o número absoluto de leads."),
+    "match_starts_override": ("Inícios de Match (override)", "Força o número absoluto de inícios."),
+    "match_completions_override": ("Conclusões de Match (override)", "Força o número absoluto de conclusões."),
+    "mqls_override": ("MQLs (override)", "Força o número absoluto de MQLs."),
+    "sqls_override": ("SQLs (override)", "Força o número absoluto de SQLs."),
+    "customers_override": ("Clientes (override)", "Força o número absoluto de clientes."),
+    "avg_rooms_per_order": ("Média de Ambientes por Pedido", "Ambientes contratados em média por cliente."),
+    "avg_price_per_room": ("Preço Médio por Ambiente", "Valor médio cobrado por ambiente."),
+    "upsell_volume": ("Volume de Upsell", "Upsells médios por cliente."),
+    "upsell_avg_price": ("Preço Médio Upsell", "Valor médio de upsell."),
+    "avg_ticket_override": ("Ticket Médio (override)", "Força o valor do ticket médio."),
+    "target_revenue": ("Meta de Receita", "Receita-alvo para comparação."),
+    "target_customers": ("Meta de Clientes", "Quantidade-alvo de clientes."),
+    "target_engagement_rate": ("Meta de Engajamento", "% de engajamento esperado."),
+}
+
 with st.sidebar:
     st.header("Fonte de dados")
     source = st.radio("Escolha a fonte", ["Planilha CSV", "Editor no app"])
@@ -146,7 +176,7 @@ with st.sidebar:
     else:
         st.caption("Preencha abaixo para calcular sem planilha. Você pode exportar como CSV.")
 
-# EDITOR NO APP (valores padrão)
+# Defaults (base)
 defaults = dict(
     visitors_total=15951, prop_seo=0.0179, prop_sem=0.9085, prop_other=0.0736,
     engagement_rate=2227/15951, match_start_rate=8492/2227, match_completion_rate=2227/8492,
@@ -164,16 +194,21 @@ def editor_form():
     keys = list(defaults.keys())
     values = {}
     for i, k in enumerate(keys):
+        label, helptext = LABELS.get(k, (k, None))
         with cols[i % 3]:
             if "prop_" in k or "rate" in k:
-                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.0001, format="%.6f")
+                values[k] = st.number_input(label, value=float(defaults[k]), min_value=0.0, step=0.0001, format="%.6f", help=helptext)
             elif "price" in k or "avg_ticket_override" in k or k in ["target_revenue"]:
-                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.01)
+                values[k] = st.number_input(label, value=float(defaults[k]), min_value=0.0, step=0.01, help=helptext)
             elif "override" in k or "visitors_total" in k or "customers" in k or "match_starts" in k:
-                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=1.0)
+                values[k] = st.number_input(label, value=float(defaults[k]), min_value=0.0, step=1.0, help=helptext)
             else:
-                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.01)
+                values[k] = st.number_input(label, value=float(defaults[k]), min_value=0.0, step=0.01, help=helptext)
     return values
+
+# Establish baseline in session_state once (for delta calc)
+if "baseline_inputs" not in st.session_state:
+    st.session_state["baseline_inputs"] = defaults.copy()
 
 # PROCESSAMENTO
 if source == "Planilha CSV":
@@ -182,14 +217,12 @@ if source == "Planilha CSV":
         st.stop()
     row = df.iloc[0]
     inputs = parse_inputs_from_row(row)
+    # Define baseline as the row loaded (first load only)
+    if "csv_baseline_set" not in st.session_state:
+        st.session_state["baseline_inputs"] = inputs.copy()
+        st.session_state["csv_baseline_set"] = True
 else:
     inputs = editor_form()
-    st.download_button(
-        "⬇️ Baixar CSV da base técnica (com estes valores)",
-        data=pd.DataFrame([inputs]).to_csv(index=False).encode("utf-8"),
-        file_name="value_tree_base_tecnica.csv",
-        mime="text/csv",
-    )
 
 # Overrides rápidos (sem salvar)
 with st.expander("Overrides rápidos (testes no app)"):
@@ -205,12 +238,13 @@ if not math.isnan(override_close): inputs["close_rate"] = override_close
 
 # CÁLCULOS
 results = compute(inputs)
+
 if not math.isnan(override_avg_ticket):
     results["avg_ticket"] = override_avg_ticket
     results["revenue"] = results["customers"] * results["avg_ticket"]
 
 # VISÕES
-tab1, tab2 = st.tabs(["🌿 Blocos", "🔗 Árvore horizontal (Graphviz)"])
+tab1, tab2, tab3 = st.tabs(["🌿 Blocos", "🔗 Árvore horizontal (Graphviz)", "📈 Impacto na Receita"])
 
 def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num", decimals: int = 0):
     col1, col2 = st.columns([1, 1])
@@ -322,3 +356,46 @@ with tab2:
     }}
     '''
     st.graphviz_chart(dot, use_container_width=True)
+
+with tab3:
+    st.subheader("Impacto na Receita (vs. base)")
+
+    # Baseline (guardada no primeiro load)
+    base_i = st.session_state["baseline_inputs"].copy()
+
+    # Função que calcula receita com/sem overrides
+    def revenue_of(i: Dict[str, Any], ignore_overrides: bool = False) -> float:
+        j = i.copy()
+        if ignore_overrides:
+            for k in ["leads_override","match_starts_override","match_completions_override","mqls_override","sqls_override","customers_override","avg_ticket_override"]:
+                j[k] = None
+        return compute(j)["revenue"]
+
+    use_overrides = st.checkbox("Usar overrides no cálculo de impacto", value=False, help="Se desmarcado, o impacto considera apenas as fórmulas do funil (ignora overrides).")
+
+    base_rev = revenue_of(base_i, ignore_overrides=not use_overrides)
+    cur_rev = revenue_of(inputs, ignore_overrides=not use_overrides)
+
+    if base_rev and base_rev != 0:
+        delta = (cur_rev - base_rev) / base_rev
+        st.metric("Variação total da receita", fmt(delta, "perc"))
+    else:
+        st.write("Base de receita igual a zero — impossível calcular % de variação.")
+
+    # Impacto one-at-a-time (OAT)
+    st.markdown("**Impacto isolado por hipótese (um de cada por vez)**")
+    keys = [
+        "visitors_total","engagement_rate","mql_rate","sql_rate","close_rate",
+        "avg_rooms_per_order","avg_price_per_room"
+    ]
+    rows = []
+    for k in keys:
+        test = base_i.copy()
+        test[k] = inputs[k]
+        test_rev = revenue_of(test, ignore_overrides=not use_overrides)
+        if base_rev and base_rev != 0:
+            pct = (test_rev - base_rev) / base_rev
+            rows.append({"Hipótese": LABELS.get(k, (k,""))[0], "Impacto na Receita": fmt(pct, "perc")})
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.caption("Cálculo OAT: muda-se apenas a hipótese indicada, mantendo todas as demais na base. Overrides podem mascarar impactos; desative-os no toggle acima para ver a sensibilidade estrutural.")
