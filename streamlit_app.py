@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Value Tree — AB", layout="wide")
 st.title("🌳 Value Tree — AB (Match)")
-st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz).")
+st.caption("Planilha técnica + Editor no app, com árvore horizontal (Graphviz) e overrides por nó.")
 
 @st.cache_data
 def load_csv(upload) -> pd.DataFrame:
@@ -50,7 +50,7 @@ def parse_inputs_from_row(row: pd.Series) -> Dict[str, Any]:
         "prop_sem": f01(get("prop_sem")),
         "prop_other": f01(get("prop_other")),
         "engagement_rate": f01(get("engagement_rate")),
-        "match_start_rate": f01(get("match_start_rate")),
+        "match_start_rate": fnum(get("match_start_rate")),               # pode ser >1 (múltiplos inícios/lead)
         "match_completion_rate": f01(get("match_completion_rate")),
         "mql_rate": f01(get("mql_rate")),
         "score_accuracy": f01(get("score_accuracy", 1.0)),
@@ -58,6 +58,8 @@ def parse_inputs_from_row(row: pd.Series) -> Dict[str, Any]:
         "close_rate": f01(get("close_rate")),
         "first_contact_speed_days": fnum(get("first_contact_speed_days")),
         "leads_override": opt("leads_override"),
+        "match_starts_override": opt("match_starts_override"),
+        "match_completions_override": opt("match_completions_override"),
         "mqls_override": opt("mqls_override"),
         "sqls_override": opt("sqls_override"),
         "customers_override": opt("customers_override"),
@@ -65,6 +67,7 @@ def parse_inputs_from_row(row: pd.Series) -> Dict[str, Any]:
         "avg_price_per_room": fnum(get("avg_price_per_room")),
         "upsell_volume": fnum(get("upsell_volume")),
         "upsell_avg_price": fnum(get("upsell_avg_price")),
+        "avg_ticket_override": opt("avg_ticket_override"),
         "target_revenue": opt("target_revenue"),
         "target_customers": opt("target_customers"),
         "target_engagement_rate": opt("target_engagement_rate"),
@@ -78,8 +81,11 @@ def compute(i: Dict[str, Any]):
     leads_calc = i["visitors_total"] * i["engagement_rate"]
     leads = i["leads_override"] if i["leads_override"] is not None else leads_calc
 
-    match_starts = leads * i["match_start_rate"]
-    match_completions = match_starts * i["match_completion_rate"]
+    match_starts_calc = leads * max(0.0, i["match_start_rate"])
+    match_starts = i["match_starts_override"] if i.get("match_starts_override") is not None else match_starts_calc
+
+    match_completions_calc = match_starts * i["match_completion_rate"]
+    match_completions = i["match_completions_override"] if i.get("match_completions_override") is not None else match_completions_calc
 
     mqls_calc = leads * i["mql_rate"] * i["score_accuracy"]
     mqls = i["mqls_override"] if i["mqls_override"] is not None else mqls_calc
@@ -90,7 +96,9 @@ def compute(i: Dict[str, Any]):
     customers_calc = sqls * i["close_rate"]
     customers = i["customers_override"] if i["customers_override"] is not None else customers_calc
 
-    avg_ticket = (i["avg_rooms_per_order"] * i["avg_price_per_room"]) + (i["upsell_volume"] * i["upsell_avg_price"])
+    avg_ticket_calc = (i["avg_rooms_per_order"] * i["avg_price_per_room"]) + (i["upsell_volume"] * i["upsell_avg_price"])
+    avg_ticket = i["avg_ticket_override"] if i.get("avg_ticket_override") is not None else avg_ticket_calc
+
     revenue = customers * avg_ticket
 
     return {
@@ -107,14 +115,14 @@ def compute(i: Dict[str, Any]):
         "revenue": revenue,
     }
 
-def fmt(x: float, kind: str = "num") -> str:
+def fmt(x: float, kind: str = "num", decimals: int = 0) -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "–"
     if kind == "perc":
         return f"{x*100:,.2f}%".replace(",", ".")
     if kind == "reais":
         return f"R$ {x:,.2f}".replace(",", ".")
-    return f"{x:,.0f}".replace(",", ".")
+    return f"{x:,.{decimals}f}".replace(",", ".")
 
 with st.sidebar:
     st.header("Fonte de dados")
@@ -134,19 +142,20 @@ with st.sidebar:
                     df = load_url(url)
                 except Exception as e:
                     st.error(f"Erro ao ler CSV da URL: {e}")
-        st.caption("Base esperada: colunas como visitors_total, prop_seo, engagement_rate, etc.")
+        st.caption("Base esperada: colunas como visitors_total, prop_seo, engagement_rate, overrides etc.")
     else:
         st.caption("Preencha abaixo para calcular sem planilha. Você pode exportar como CSV.")
 
-# EDITOR NO APP (valores padrão baseados no seu exemplo)
+# EDITOR NO APP (valores padrão)
 defaults = dict(
-    visitors_total=14951, prop_seo=0.017, prop_sem=0.91, prop_other=0.068,
-    engagement_rate=0.9843, match_start_rate=0.139, match_completion_rate=0.26,
-    mql_rate=0.117, score_accuracy=1.0, sql_rate=0.035, close_rate=0.046,
-    first_contact_speed_days=4.6, leads_override=2192, mqls_override=285,
-    sqls_override=257, customers_override=9, avg_rooms_per_order=2.6,
-    avg_price_per_room=612.94, upsell_volume=0, upsell_avg_price=239.85,
-    target_revenue=5516.44, target_customers=9, target_engagement_rate=0.98,
+    visitors_total=15951, prop_seo=0.0179, prop_sem=0.9085, prop_other=0.0736,
+    engagement_rate=2227/15951, match_start_rate=8492/2227, match_completion_rate=2227/8492,
+    mql_rate=2192/2227, score_accuracy=1.0, sql_rate=257/2192, close_rate=9/257,
+    first_contact_speed_days=4.6, leads_override=2227, match_starts_override=8492,
+    match_completions_override=2227, mqls_override=2192, sqls_override=257, customers_override=9,
+    avg_rooms_per_order=2.6, avg_price_per_room=239.85, upsell_volume=0, upsell_avg_price=0,
+    avg_ticket_override=612.94,
+    target_revenue=5516.46, target_customers=9, target_engagement_rate=2227/15951,
 )
 
 def editor_form():
@@ -157,10 +166,10 @@ def editor_form():
     for i, k in enumerate(keys):
         with cols[i % 3]:
             if "prop_" in k or "rate" in k:
-                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, max_value=1.0, step=0.001, format="%.6f")
-            elif "price" in k or "avg_ticket" in k or k in ["target_revenue"]:
+                values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.0001, format="%.6f")
+            elif "price" in k or "avg_ticket_override" in k or k in ["target_revenue"]:
                 values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.01)
-            elif "override" in k or "customers" in k or "visitors_total" in k:
+            elif "override" in k or "visitors_total" in k or "customers" in k or "match_starts" in k:
                 values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=1.0)
             else:
                 values[k] = st.number_input(k, value=float(defaults[k]), min_value=0.0, step=0.01)
@@ -175,7 +184,6 @@ if source == "Planilha CSV":
     inputs = parse_inputs_from_row(row)
 else:
     inputs = editor_form()
-    # botão para download do CSV da base técnica
     st.download_button(
         "⬇️ Baixar CSV da base técnica (com estes valores)",
         data=pd.DataFrame([inputs]).to_csv(index=False).encode("utf-8"),
@@ -187,8 +195,8 @@ else:
 with st.expander("Overrides rápidos (testes no app)"):
     st.write("Use para testar cenários sem alterar a base.")
     override_visitors = st.number_input("Override: Visitantes totais", min_value=0.0, value=float("nan"))
-    override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
-    override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, max_value=1.0, value=float("nan"))
+    override_eng = st.number_input("Override: Taxa de engajamento (0-1)", min_value=0.0, value=float("nan"))
+    override_close = st.number_input("Override: Taxa de fechamento (0-1)", min_value=0.0, value=float("nan"))
     override_avg_ticket = st.number_input("Override: Ticket médio", min_value=0.0, value=float("nan"))
 
 if not math.isnan(override_visitors): inputs["visitors_total"] = override_visitors
@@ -204,13 +212,13 @@ if not math.isnan(override_avg_ticket):
 # VISÕES
 tab1, tab2 = st.tabs(["🌿 Blocos", "🔗 Árvore horizontal (Graphviz)"])
 
-def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num"):
+def render_row(title: str, value: float, sub: Optional[str] = None, target: Optional[float] = None, kind: str = "num", decimals: int = 0):
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown(f"**{title}**")
         if sub: st.caption(sub)
     with col2:
-        badge = fmt(value, kind)
+        badge = fmt(value, kind, decimals)
         if target is not None:
             color = "green" if value >= target else "red"
             st.markdown(f"<div style='text-align:right; font-weight:600; color:{color};'>{badge}</div>", unsafe_allow_html=True)
@@ -227,7 +235,7 @@ with tab1:
         render_row("Outros", results["visitors_other"])
         st.divider()
         st.subheader("Funil do Match")
-        render_row("Taxa de Engajamento", inputs["engagement_rate"], kind="perc", target=inputs.get("target_engagement_rate"))
+        render_row("Taxa de Engajamento", inputs["engagement_rate"], kind="perc")
         render_row("Leads", results["leads"])
         render_row("Inícios de Match", results["match_starts"])
         render_row("Conclusões de Match", results["match_completions"])
@@ -236,9 +244,9 @@ with tab1:
         render_row("Clientes", results["customers"], target=inputs.get("target_customers"))
     with right:
         st.subheader("Ticket & Receita")
-        render_row("Média de ambientes por pedido", inputs["avg_rooms_per_order"])
+        render_row("Média de ambientes por pedido", inputs["avg_rooms_per_order"], decimals=2)
         render_row("Preço médio por ambiente", inputs["avg_price_per_room"], kind="reais")
-        render_row("Volume de upsell", inputs["upsell_volume"])
+        render_row("Volume de upsell", inputs["upsell_volume"], decimals=2)
         render_row("Preço médio upsell", inputs["upsell_avg_price"], kind="reais")
         render_row("Ticket médio", results["avg_ticket"], kind="reais")
         st.divider()
@@ -270,20 +278,20 @@ with tab2:
         label="Fontes de Tráfego";
         color="#EAEAEA";
         vtot [label=<{vtot}<br/><font point-size="10">Visitantes totais</font>>];
-        seo  [label=<{seo}<br/><font point-size="10">SEO ({inputs['prop_seo']*100:.1f}%)</font>>];
-        sem  [label=<{sem}<br/><font point-size="10">SEM ({inputs['prop_sem']*100:.1f}%)</font>>];
-        oth  [label=<{oth}<br/><font point-size="10">Outros ({inputs['prop_other']*100:.1f}%)</font>>];
+        seo  [label=<{seo}<br/><font point-size="10">SEO ({inputs['prop_seo']*100:.2f}%)</font>>];
+        sem  [label=<{sem}<br/><font point-size="10">SEM ({inputs['prop_sem']*100:.2f}%)</font>>];
+        oth  [label=<{oth}<br/><font point-size="10">Outros ({inputs['prop_other']*100:.2f}%)</font>>];
       }}
 
       subgraph cluster_funnel {{
         label="Funil do Match";
         color="#EAEAEA";
         leads [label=<{lead}<br/><font point-size="10">Leads (engaj. {inputs['engagement_rate']*100:.2f}%)</font>>];
-        mstarts [label=<{ms}<br/><font point-size="10">Inícios ({inputs['match_start_rate']*100:.1f}%)</font>>];
-        mcomp   [label=<{mc}<br/><font point-size="10">Conclusões ({inputs['match_completion_rate']*100:.1f}%)</font>>];
-        mqls    [label=<{mql}<br/><font point-size="10">MQLs (score {inputs['mql_rate']*100:.1f}%)</font>>];
-        sqls    [label=<{sql}<br/><font point-size="10">SQLs ({inputs['sql_rate']*100:.1f}%)</font>>];
-        cust    [label=<{cus}<br/><font point-size="10">Clientes (fech. {inputs['close_rate']*100:.1f}%)</font>>];
+        mstarts [label=<{ms}<br/><font point-size="10">Inícios</font>>];
+        mcomp   [label=<{mc}<br/><font point-size="10">Conclusões</font>>];
+        mqls    [label=<{mql}<br/><font point-size="10">MQLs</font>>];
+        sqls    [label=<{sql}<br/><font point-size="10">SQLs</font>>];
+        cust    [label=<{cus}<br/><font point-size="10">Clientes</font>>];
       }}
 
       subgraph cluster_ticket {{
